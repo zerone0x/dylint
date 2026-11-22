@@ -26,8 +26,8 @@ use rustc_index::bit_set::DenseBitSet;
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::ty::{
-    self, ClauseKind, EarlyBinder, FnDef, FnSig, GenericArgsRef, Param, ParamTy,
-    ProjectionPredicate, Ty,
+    self, ClauseKind, EarlyBinder, FnDef, FnSig, GenericArgsRef, Param, ParamTy, ProjectionClause,
+    Ty,
     adjustment::{Adjust, Adjustment, AutoBorrow},
 };
 use rustc_span::symbol::Symbol;
@@ -527,9 +527,9 @@ fn inner_arg_implements_traits<'tcx>(
     let destruct_trait_def_id = cx.tcx.lang_items().destruct_trait();
     let sized_trait_def_id = cx.tcx.lang_items().sized_trait();
 
-    let predicates = cx.tcx.param_env(callee_def_id).caller_bounds();
+    let mut predicates = cx.tcx.param_env(callee_def_id).caller_bounds();
     let projection_predicates = predicates
-        .iter()
+        .clone()
         .filter_map(|predicate| {
             if let ClauseKind::Projection(projection_predicate) = predicate.kind().skip_binder() {
                 Some(projection_predicate)
@@ -541,7 +541,7 @@ fn inner_arg_implements_traits<'tcx>(
 
     // If no traits were found, or only the `Destruct`, `Sized`, or `Any` traits were found, return.
     if predicates
-        .iter()
+        .clone()
         .filter_map(|predicate| {
             if let ClauseKind::Trait(trait_predicate) = predicate.kind().skip_binder()
                 && trait_predicate.trait_ref.self_ty() == param_ty.to_ty(cx.tcx)
@@ -574,7 +574,7 @@ fn inner_arg_implements_traits<'tcx>(
         return false;
     }
 
-    predicates.iter().all(|predicate| {
+    predicates.all(|predicate| {
         let predicate = EarlyBinder::bind(cx.tcx, predicate)
             .instantiate(cx.tcx, substs_with_new_ty.as_slice())
             .skip_norm_wip();
@@ -603,7 +603,7 @@ fn replace_types<'tcx>(
     new_ty: Ty<'tcx>,
     fn_sig: FnSig<'tcx>,
     arg_index: usize,
-    projection_predicates: &[ProjectionPredicate<'tcx>],
+    projection_predicates: &[ProjectionClause<'tcx>],
     substs: &mut [ty::GenericArg<'tcx>],
 ) -> bool {
     let mut replaced = DenseBitSet::new_empty(substs.len());
