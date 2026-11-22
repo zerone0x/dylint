@@ -16,6 +16,22 @@ fn ui() {
 
     clone_rust_clippy(tempdir.path()).unwrap();
 
+    // `ctrlc 3.1.0` pulls in `nix 0.9.0`, which needs libc symbols removed in 0.2.190 on macOS.
+    // Pin libc in the cloned fixture's lockfile without changing the upstream test manifest.
+    #[cfg(target_os = "macos")]
+    dylint_internal::cargo::update("Clippy's 5041_allow_dev_build fixture")
+        .build()
+        .current_dir(tempdir.path())
+        .arg("--manifest-path")
+        .arg(
+            tempdir
+                .path()
+                .join("tests/ui-cargo/multiple_crate_versions/5041_allow_dev_build/Cargo.toml"),
+        )
+        .args(["-p", "libc", "--precise", "0.2.189"])
+        .success()
+        .unwrap();
+
     // smoelius: `adjust_macro_use_imports_test` no longer seems to be necessary.
     // let src_base = tempdir.path().join("tests/ui");
     // adjust_macro_use_imports_test(&src_base).unwrap();
