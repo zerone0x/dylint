@@ -7,14 +7,14 @@ extern crate rustc_span;
 
 use clippy_utils::diagnostics::span_lint_and_note;
 use rustc_hir::{
-    HirId, Item, ItemKind, Node, OwnerNode, Path, PathSegment, UseKind, UsePath,
+    HirId, Item, ItemKind, Node, OwnerNode, Path, PathSegment, UseKind, UsePath, UseTree,
     def::{DefKind, Res},
     def_id::{CRATE_DEF_ID, DefId},
     intravisit::{Visitor, walk_item},
 };
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::ty::TyCtxt;
-use rustc_span::Symbol;
+use rustc_span::{Symbol, symbol::kw};
 
 dylint_linting::declare_late_lint! {
     /// ### What it does
@@ -81,6 +81,15 @@ impl<'tcx> LateLintPass<'tcx> for InconsistentQualification {
                     ..
                 })
             )
+            && !cx.tcx.hir_parent_iter(hir_id).any(|(_, node)| {
+                matches!(
+                    node,
+                    Node::Item(Item {
+                        kind: ItemKind::Use(..),
+                        ..
+                    })
+                )
+            })
         {
             // Check only modules present in the path, not all ancestors of the resolved item.
             for mod_def_id in path
@@ -108,7 +117,11 @@ impl<'tcx> LateLintPass<'tcx> for InconsistentQualification {
                     } else {
                         let parent_module_local_def_id = cx.tcx.parent_module(hir_id);
                         let parent_module = cx.tcx.hir_get_module(parent_module_local_def_id);
-                        visitor.visit_mod(parent_module.0, parent_module.1, parent_module.2);
+                        visitor.visit_mod(
+                            parent_module.0,
+                            parent_module.1,
+                            parent_module_local_def_id,
+                        );
                     }
                     if visitor.diagnostic_emitted {
                         return;
@@ -146,6 +159,129 @@ impl<'tcx> UseVisitor<'_, 'tcx, '_> {
             }
         }
     }
+
+    fn check_use_tree(
+        &mut self,
+        item: &'tcx Item<'tcx>,
+        tree: &'tcx UseTree<'tcx>,
+        prefix_segments: &[PathSegment<'tcx>],
+        nested: bool,
+    ) {
+        if let UseKind::Nested { items } = tree.kind {
+            let segments = prefix_segments
+                .iter()
+                .copied()
+                .chain(tree.prefix.segments.iter().copied())
+                .collect::<Vec<_>>();
+            for (nested_tree, ..) in items {
+                self.check_use_tree(item, nested_tree, &segments, true);
+                if self.diagnostic_emitted {
+                    break;
+                }
+            }
+            return;
+        }
+
+        // Ignore underscore imports, including those within a nested use tree.
+        if matches!(tree.kind, UseKind::Single(ident) if ident.name.as_str() == "_") {
+            return;
+        }
+
+        let use_path = tree.prefix;
+        let local_owner_path = if use_path.res.iter().flatten().copied().any(is_local) {
+            let local_def_id = self
+                .enclosing_scope_hir_id
+                .and_then(|hir_id| get_owner(self.cx.tcx, hir_id))
+                .map_or(CRATE_DEF_ID, |owner| owner.def_id().def_id);
+            self.cx.get_def_path(local_def_id.into())
+        } else {
+            Vec::new()
+        };
+        // In `use path::{self, item}`, `self` imports `path` itself. Unlike a
+        // plain `use path::self`, lowering keeps the relative `self` segment.
+        let use_segments = if matches!(tree.kind, UseKind::Single(_))
+            && use_path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident.name == kw::SelfLower)
+        {
+            &use_path.segments[..use_path.segments.len() - 1]
+        } else {
+            use_path.segments
+        };
+        let syms = local_owner_path
+            .into_iter()
+            .chain(
+                prefix_segments
+                    .iter()
+                    .chain(use_segments.iter())
+                    .map(|segment| segment.ident.name),
+            )
+            .collect::<Vec<_>>();
+        let path_match = match tree.kind {
+            UseKind::Single(_) => {
+                if let Some(matched_prefix) = match_path_prefix(use_path, self.path) {
+                    Some(PathMatch::Prefix(matched_prefix))
+                } else if !syms.is_empty() && syms[..syms.len() - 1] == *self.syms_mod {
+                    Some(PathMatch::Mod)
+                } else {
+                    None
+                }
+            }
+            UseKind::Glob => (syms == self.syms_mod).then_some(PathMatch::Mod),
+            UseKind::Nested { .. } => None,
+        };
+        let Some(path_match) = path_match else {
+            return;
+        };
+        let note_span = if nested {
+            match tree.kind {
+                UseKind::Single(ident) => tree.prefix.span.with_hi(ident.span.hi()),
+                UseKind::Glob => tree.prefix.span,
+                UseKind::Nested { .. } => unreachable!(),
+            }
+        } else {
+            item.span
+        };
+        let use_path_is_trait = use_path
+            .res
+            .iter()
+            .flatten()
+            .any(|res| matches!(res, Res::Def(DefKind::Trait, _)));
+        // A trait import must match a prefix of the qualified path exactly.
+        if use_path_is_trait && !matches!(path_match, PathMatch::Prefix(_)) {
+            return;
+        }
+
+        let (span, msg) = match path_match {
+            PathMatch::Prefix(matched_prefix) => {
+                let span = matched_prefix
+                    .first()
+                    .unwrap()
+                    .ident
+                    .span
+                    .with_hi(matched_prefix.last().unwrap().ident.span.hi());
+                let path = path_to_string(matched_prefix.iter().map(|segment| &segment.ident.name));
+                (span, format!("`{path}` was imported here"))
+            }
+            PathMatch::Mod => {
+                let path = path_to_string(self.syms_mod);
+                (
+                    self.path.span,
+                    format!("items from `{path}` were imported here"),
+                )
+            }
+        };
+        span_lint_and_note(
+            self.cx,
+            INCONSISTENT_QUALIFICATION,
+            span,
+            "inconsistent qualification",
+            Some(note_span),
+            msg,
+        );
+        self.diagnostic_emitted = true;
+    }
 }
 
 enum PathMatch<'hir> {
@@ -166,82 +302,10 @@ impl<'tcx> Visitor<'tcx> for UseVisitor<'_, 'tcx, '_> {
         }
 
         if !item.span.from_expansion()
-            // smoelius: Ignore underscore imports.
-            && item.kind.ident().is_none_or(|name| name.as_str() != "_")
             && self.cx.tcx.hir_get_enclosing_scope(item.hir_id()) == self.enclosing_scope_hir_id
-            && let ItemKind::Use(use_path, use_kind) = item.kind
-            && let local_owner_path = if use_path.res.iter().flatten().copied().any(is_local) {
-                let local_def_id = self
-                    .enclosing_scope_hir_id
-                    .and_then(|hir_id| get_owner(self.cx.tcx, hir_id))
-                    .map_or(CRATE_DEF_ID, |owner| owner.def_id().def_id);
-                self.cx.get_def_path(local_def_id.into())
-            } else {
-                Vec::new()
-            }
-            && let syms = local_owner_path
-                .into_iter()
-                .chain(use_path.segments.iter().map(|segment| segment.ident.name))
-                .collect::<Vec<_>>()
-            && let Some(path_match) = {
-                match use_kind {
-                    UseKind::Single(_)=> {
-                        if let Some(matched_prefix) = match_path_prefix(use_path, self.path) {
-                            Some(PathMatch::Prefix(matched_prefix))
-                        } else if syms[..syms.len() - 1] == *self.syms_mod {
-                            Some(PathMatch::Mod)
-                        } else {
-                            None
-                        }
-                    }
-                    UseKind::Glob => {
-                        if syms == self.syms_mod {
-                            Some(PathMatch::Mod)
-                        } else {
-                            None
-                        }
-                    }
-                    UseKind::ListStem => None,
-                }
-            }
-            && let use_path_is_trait = use_path
-                .res
-                .iter()
-                .flatten()
-                .any(|res| matches!(res, Res::Def(DefKind::Trait, _)))
-            // smoelius: If `use_path` corresponds to a trait, then it must match some prefix of
-            // `self.path` exactly for a warning to be emitted.
-            && (!use_path_is_trait || matches!(path_match, PathMatch::Prefix(_)))
+            && let ItemKind::Use(tree) = &item.kind
         {
-            let (span, msg) = match path_match {
-                PathMatch::Prefix(matched_prefix) => {
-                    let span = matched_prefix
-                        .first()
-                        .unwrap()
-                        .ident
-                        .span
-                        .with_hi(matched_prefix.last().unwrap().ident.span.hi());
-                    let path =
-                        path_to_string(matched_prefix.iter().map(|segment| &segment.ident.name));
-                    (span, format!("`{path}` was imported here"))
-                }
-                PathMatch::Mod => {
-                    let path = path_to_string(self.syms_mod);
-                    (
-                        self.path.span,
-                        format!("items from `{path}` were imported here"),
-                    )
-                }
-            };
-            span_lint_and_note(
-                self.cx,
-                INCONSISTENT_QUALIFICATION,
-                span,
-                "inconsistent qualification",
-                Some(item.span),
-                msg,
-            );
-            self.diagnostic_emitted = true;
+            self.check_use_tree(item, tree, &[], false);
         }
         walk_item(self, item);
     }

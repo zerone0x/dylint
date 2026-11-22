@@ -36,88 +36,100 @@ LL |     use std::env::{self, var};
    |                          ^^^
 
 warning: inconsistent qualification
-  --> $DIR/main.rs:29:24
+  --> $DIR/main.rs:32:24
    |
 LL |         assert_eq!(Err(std::env::VarError::NotPresent), var("LD_PRELOAD"));
    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
 note: items from `std::env` were imported here
-  --> $DIR/main.rs:26:5
+  --> $DIR/main.rs:27:15
+   |
+LL |         env::{var, var_os},
+   |               ^^^
+
+warning: inconsistent qualification
+  --> $DIR/main.rs:42:24
+   |
+LL |         assert_eq!(Err(std::env::VarError::NotPresent), var("LD_PRELOAD"));
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: items from `std::env` were imported here
+  --> $DIR/main.rs:39:5
    |
 LL |     use std::env::*;
    |     ^^^^^^^^^^^^^^^^
 
 warning: inconsistent qualification
-  --> $DIR/main.rs:39:24
+  --> $DIR/main.rs:52:24
    |
 LL |         assert_eq!(Err(std::env::VarError::NotPresent), var("LD_PRELOAD"));
    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
 note: items from `std::env` were imported here
-  --> $DIR/main.rs:37:9
+  --> $DIR/main.rs:50:9
    |
 LL |         use std::env::var_os;
    |         ^^^^^^^^^^^^^^^^^^^^^
 
 warning: inconsistent qualification
-  --> $DIR/main.rs:77:9
+  --> $DIR/main.rs:90:9
    |
 LL |         bar::Baz::new()
    |         ^^^^^^^^
    |
 note: `bar::Baz` was imported here
-  --> $DIR/main.rs:74:5
+  --> $DIR/main.rs:87:5
    |
 LL |     use bar::Baz;
    |     ^^^^^^^^^^^^^
 
 warning: inconsistent qualification
-  --> $DIR/main.rs:95:15
+  --> $DIR/main.rs:108:15
    |
 LL |         <_ as std::borrow::Borrow<T>>::borrow(x)
    |               ^^^^^^^^^^^^^^^^^^^
    |
 note: `std::borrow::Borrow` was imported here
-  --> $DIR/main.rs:92:5
+  --> $DIR/main.rs:105:5
    |
 LL |     use std::borrow::Borrow;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: inconsistent qualification
-  --> $DIR/main.rs:104:9
+  --> $DIR/main.rs:117:9
    |
 LL |         bar::baz::qux()
    |         ^^^^^^^^
    |
 note: `bar::baz` was imported here
-  --> $DIR/main.rs:101:5
+  --> $DIR/main.rs:114:5
    |
 LL |     use bar::baz;
    |     ^^^^^^^^^^^^^
 
 warning: inconsistent qualification
-  --> $DIR/main.rs:147:17
+  --> $DIR/main.rs:160:17
    |
 LL |         let _ = std::env::consts::EXE_SUFFIX;
    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
 note: items from `std::env` were imported here
-  --> $DIR/main.rs:143:5
+  --> $DIR/main.rs:156:5
    |
 LL |     use std::env::split_paths;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: inconsistent qualification
-  --> $DIR/main.rs:157:17
+  --> $DIR/main.rs:170:17
    |
 LL |         let _ = std::env::consts::EXE_SUFFIX;
    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
 note: items from `std::env` were imported here
-  --> $DIR/main.rs:152:20
+  --> $DIR/main.rs:165:20
    |
 LL |     use std::env::{split_paths, var};
    |                    ^^^^^^^^^^^
 
-warning: 10 warnings emitted
+warning: 11 warnings emitted
 
